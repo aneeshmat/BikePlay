@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Navigation Tracker</title>
+  <!-- Correct script tag -->
+  script.js</script>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      padding: 20px;
+      text-align: center;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 16px;
+      cursor: pointer;
+    }
+    #status {
+      margin-top: 20px;
+      font-weight: bold;
+      color: #333;
+    }
+    #log {
+      margin-top: 16px;
+      font-family: monospace;
+      font-size: 14px;
+      text-align: left;
+      white-space: pre-wrap;
+      color: #555;
+    }
+  </style>
+</head>
+<body>
+  <h1>Navigation Tracker</h1>
+  <button onclick="startTracking()">Start Tracking</button>
+  <p id="status">Waiting to start...</p>
+  <div id="log"></div>
+</body>
+</html>
