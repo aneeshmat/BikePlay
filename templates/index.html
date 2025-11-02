@@ -2,40 +2,227 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Navigation Tracker</title>
-  <!-- Correct script tag -->
-  script.js</script>
   <style>
-    body {
-      font-family: Arial, sans-serif;
-      padding: 20px;
-      text-align: center;
+    :root {
+      --ok: #2e7d32;
+      --warn: #e65100;
+      --err: #c62828;
+      --muted: #666;
     }
-    button {
-      padding: 10px 20px;
-      font-size: 16px;
-      cursor: pointer;
-    }
-    #status {
-      margin-top: 20px;
-      font-weight: bold;
-      color: #333;
-    }
-    #log {
-      margin-top: 16px;
-      font-family: monospace;
-      font-size: 14px;
-      text-align: left;
-      white-space: pre-wrap;
-      color: #555;
-    }
+    body { font-family: Arial, sans-serif; padding: 20px; text-align: center; }
+    .row { margin: 10px 0; }
+    button { padding: 10px 16px; font-size: 16px; margin: 0 6px; cursor: pointer; }
+    #status { margin-top: 12px; font-weight: bold; color: #333; }
+    #warn { margin: 12px auto; max-width: 700px; background: #fff3cd; color: #7a4b00; border: 1px solid #ffeeba; border-radius: 6px; padding: 12px; display: none; text-align: left;}
+    #log { margin: 16px auto; max-width: 900px; text-align: left; font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size: 13px; white-space: pre-wrap; border: 1px solid #ddd; padding: 12px; border-radius: 6px; color: #222; background: #fafafa; }
+    .muted { color: var(--muted); }
+    .ok { color: var(--ok); }
+    .error { color: var(--err); }
   </style>
 </head>
 <body>
   <h1>Navigation Tracker</h1>
-  <button onclick="startTracking()">Start Tracking</button>
-  <p id="status">Waiting to start...</p>
-  <div id="log"></div>
+
+  <div id="warn"></div>
+
+  <div class="row">
+    <button id="startBtn">Start Tracking</button>
+    <button id="stopBtn" disabled>Stop</button>
+  </div>
+
+  <div id="status" class="muted">Waiting to start…</div>
+
+  <div id="log" aria-live="polite"></div>
+
+  <script>
+    // ======== CONFIGURE YOUR ENDPOINT HERE ========
+    // Option A (recommended when this file is served by Flask on the same origin):
+    const SAME_ORIGIN_ENDPOINT = "/navdata";
+
+    // Option B (if you must POST to a LAN server directly):
+    const LAN_ENDPOINT = "http://172.16.48.155:5000/navdata"; // <- your Flask server
+
+    // Pick endpoint automatically:
+    // - If the page is served by Flask (has a hostname), use SAME_ORIGIN_ENDPOINT.
+    // - If opened as file://, fall back to LAN endpoint.
+    let endpoint = (location.protocol === "file:") ? LAN_ENDPOINT : SAME_ORIGIN_ENDPOINT;
+
+    // ======== STATE ========
+    let watchId = null;
+    let lastSent = 0;
+    const SEND_INTERVAL_MS = 1000;
+
+    // ======== UI HELPERS ========
+    const statusEl = document.getElementById("status");
+    const logEl = document.getElementById("log");
+    const warnEl = document.getElementById("warn");
+    const startBtn = document.getElementById("startBtn");
+    const stopBtn = document.getElementById("stopBtn");
+
+    function log(msg, cls = "") {
+      const ts = new Date().toLocaleTimeString();
+      const line = document.createElement("div");
+      line.className = cls;
+      line.textContent = `[${ts}] ${msg}`;
+      logEl.prepend(line);
+      // Also mirror to console for deeper debugging
+      if (cls === "error") console.error(msg);
+      else console.log(msg);
+    }
+
+    function showWarn(msg) {
+      warnEl.textContent = msg;
+      warnEl.style.display = "block";
+    }
+
+    function clearWarn() {
+      warnEl.style.display = "none";
+      warnEl.textContent = "";
+    }
+
+    // ======== ENVIRONMENT CHECKS ========
+    (function environmentChecks() {
+      // 1) Geolocation availability
+      if (!("geolocation" in navigator)) {
+        statusEl.textContent = "Geolocation not supported by this browser.";
+        log("navigator.geolocation is missing", "error");
+        startBtn.disabled = true;
+        return;
+      }
+
+      // 2) Secure context requirement (iOS & modern browsers)
+      // iOS Safari blocks geolocation on non-secure origins (except localhost).
+      const isLocalhost = ["localhost", "127.0.0.1", "::1"].includes(location.hostname);
+      const secureOK = window.isSecureContext || isLocalhost;
+
+      if (!secureOK) {
+        showWarn("This page is not in a secure context. Mobile Safari (iPhone) requires HTTPS (or localhost) for geolocation. " +
+                 "Serve this page via HTTPS (e.g., using ngrok) or run it from your Flask server with HTTPS enabled.");
+        log("Insecure context detected: geolocation may fail on mobile browsers.", "error");
+      } else {
+        clearWarn();
+      }
+
+      // 3) Mixed content check (if page is https but endpoint is http)
+      if (location.protocol === "https:" && endpoint.startsWith("http:")) {
+        showWarn("Mixed content detected: the page is HTTPS but the navdata endpoint is HTTP. " +
+                 "Browsers will block this. Use an HTTPS endpoint or same-origin '/navdata'.");
+        log("Mixed content: HTTPS page -> HTTP fetch will be blocked.", "error");
+      }
+
+      log(`Page URL: ${location.href}`);
+      log(`Using endpoint: ${endpoint}`);
+    })();
+
+    // ======== CORE LOGIC ========
+    async function sendData(payload) {
+      try {
+        const res = await fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          keepalive: true
+        });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const json = await res.json().catch(() => ({}));
+        statusEl.textContent = "Data sent!";
+        log(`POST ok → ${JSON.stringify(json)}`, "ok");
+      } catch (err) {
+        statusEl.textContent = "Error sending data.";
+        log(`Send error: ${err.message}`, "error");
+      }
+    }
+
+    function onPosition(position) {
+      const now = Date.now();
+      if (now - lastSent < SEND_INTERVAL_MS) return;
+      lastSent = now;
+
+      const c = position.coords;
+      const payload = {
+        latitude: c.latitude,
+        longitude: c.longitude,
+        speed: (c.speed ?? 0),         // m/s
+        heading: (c.heading ?? 0),     // degrees; often null at low speeds
+        accuracy: c.accuracy,
+        altitude: c.altitude ?? null,
+        altitudeAccuracy: c.altitudeAccuracy ?? null,
+        timestamp: position.timestamp
+      };
+
+      log(`pos lat=${c.latitude.toFixed(6)} lon=${c.longitude.toFixed(6)} ` +
+          `spd=${(payload.speed||0).toFixed(2)}m/s hdg=${payload.heading}`, "muted");
+
+      sendData(payload);
+    }
+
+    function onGeoError(error) {
+      const { code, message } = error;
+      statusEl.textContent = `Location error (${code}): ${message}`;
+      log(`Geolocation error (${code}): ${message}`, "error");
+
+      // Common messages to help you quickly diagnose:
+      // - "Only secure origins are allowed" → serve over HTTPS.
+      // - "User denied Geolocation" → check browser/site permissions.
+      // - "Position unavailable / Timeout" → try moving outdoors / enable GPS / increase timeout.
+    }
+
+    function startTracking() {
+      if (!navigator.geolocation) {
+        statusEl.textContent = "Geolocation not supported.";
+        log("navigator.geolocation missing", "error");
+        return;
+      }
+
+      if (watchId !== null) {
+        log("Already tracking; ignoring duplicate start.");
+        return;
+      }
+
+      statusEl.textContent = "Tracking started…";
+      startBtn.disabled = true;
+      stopBtn.disabled = false;
+
+      try {
+        // Using watchPosition to continuously stream updates
+        watchId = navigator.geolocation.watchPosition(onPosition, onGeoError, {
+          enableHighAccuracy: true,
+          maximumAge: 0,
+          timeout: 15000
+        });
+        log("watchPosition registered.");
+      } catch (e) {
+        statusEl.textContent = "Failed to start tracking.";
+        log(`watchPosition threw: ${e.message}`, "error");
+        startBtn.disabled = false;
+        stopBtn.disabled = true;
+      }
+    }
+
+    function stopTracking() {
+      if (watchId !== null) {
+        navigator.geolocation.clearWatch(watchId);
+        watchId = null;
+        statusEl.textContent = "Tracking stopped.";
+        log("Tracking stopped.", "ok");
+      }
+      startBtn.disabled = false;
+      stopBtn.disabled = true;
+    }
+
+    // Wire up buttons (user gesture is required on iOS)
+    startBtn.addEventListener("click", startTracking);
+    stopBtn.addEventListener("click", stopTracking);
+
+    // Optional: try to read current permission state where supported (not on iOS Safari)
+    if (navigator.permissions && navigator.permissions.query) {
+      navigator.permissions.query({ name: "geolocation" })
+        .then(res => log(`Permission state: ${res.state}`))
+        .catch(() => {/* ignore */});
+    }
+  </script>
 </body>
 </html>
+``
